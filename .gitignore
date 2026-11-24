@@ -23,3 +23,6 @@ __pycache__/
 *.log
 .env
 .env.*
+
+# DenseFlow generated experiment artifacts (regenerate with python3 run_experiments.py)
+experiments/output/

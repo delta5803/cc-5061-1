@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>稠密光流运动分析器 · DenseFlow</title>
+<link rel="stylesheet" href="/web/styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">≋</span>
+    <div>
+      <h1>稠密光流运动分析器</h1>
+      <small>多尺度变分求解 · 数据项 + 空间正则 · 跨尺度候选 · 标签暂挂/认领</small>
+    </div>
+  </div>
+  <div class="top-actions">
+    <span id="health" class="pill">检测内核…</span>
+    <button id="convBtn" class="ghost">坐标约定</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="tabs mode-tabs">
+      <button data-mode="builtin" class="active">实验序列播放器</button>
+      <button data-mode="upload">导入相邻帧</button>
+    </div>
+
+    <!-- ============ builtin controls ============ -->
+    <section id="builtinPanel" class="panel">
+      <label class="field">
+        <span>内置序列</span>
+        <select id="seqSelect"></select>
+      </label>
+      <div class="player">
+        <button id="prevPair" title="上一对">⏮</button>
+        <button id="playPair" title="播放/暂停">▶</button>
+        <button id="nextPair" title="下一对">⏭</button>
+        <span id="pairLabel" class="pair-label">–</span>
+      </div>
+      <input id="pairSlider" type="range" min="0" max="0" value="0" />
+      <div id="seqMeta" class="meta"></div>
+
+      <div class="subhead">大位移失败对照</div>
+      <div id="largeStudy" class="study"></div>
+    </section>
+
+    <!-- ============ upload controls ============ -->
+    <section id="uploadPanel" class="panel hidden">
+      <label class="field">
+        <span>相邻两帧（可一次多选，按文件名排序取前两张；也可分别选择）</span>
+        <input id="frameFiles" type="file" accept="image/*" multiple />
+      </label>
+      <div class="two">
+        <label class="field"><span>帧 A</span>
+          <input id="fileA" type="file" accept="image/*" /></label>
+        <label class="field"><span>帧 B</span>
+          <input id="fileB" type="file" accept="image/*" /></label>
+      </div>
+
+      <div class="brush-wrap">
+        <div class="brush-head">
+          <span>可选：前景涂鸦（约束候选/种子）</span>
+          <div>
+            <button id="brushPaint" class="mini active">笔刷</button>
+            <button id="brushErase" class="mini">橡皮</button>
+            <button id="brushClear" class="mini">清除</button>
+          </div>
+        </div>
+        <canvas id="brushCanvas" width="320" height="240"></canvas>
+        <small class="hint">在帧 A 上涂抹前景物体，分析时作为 mask 上传。</small>
+      </div>
+
+      <div class="params">
+        <label class="field"><span>金字塔层数 <b id="lvVal">4</b></span>
+          <input id="pLevels" type="range" min="1" max="6" value="4" /></label>
+        <label class="field"><span>正则权重 α <b id="alphaVal">120</b></span>
+          <input id="pAlpha" type="range" min="20" max="300" step="5" value="120" /></label>
+        <label class="field"><span>外层迭代 <b id="outerVal">4</b></span>
+          <input id="pOuter" type="range" min="1" max="8" value="4" /></label>
+        <label class="field row">
+          <input id="pCand" type="checkbox" checked />
+          <span>启用跨尺度候选分支 + 标签评分</span>
+        </label>
+      </div>
+      <button id="analyzeBtn" class="primary">运行稠密光流内核</button>
+      <div id="analyzeStatus" class="status"></div>
+    </section>
+
+    <!-- ============ metrics ============ -->
+    <section class="panel">
+      <div class="subhead">指标卡</div>
+      <div id="metricsCards" class="cards"><div class="muted">尚未运行。</div></div>
+    </section>
+
+    <!-- ============ failure feedback ============ -->
+    <section class="panel">
+      <div class="subhead">支持度 / 失败反馈</div>
+      <div id="failurePanel" class="failure"><div class="muted">–</div></div>
+    </section>
+  </aside>
+
+  <main class="main">
+    <div class="viewtabs" id="viewTabs">
+      <button data-view="A" class="active">帧 A + 矢量</button>
+      <button data-view="B">帧 B</button>
+      <button data-view="flow">流场色图</button>
+      <button data-view="residual">匹配残差</button>
+      <button data-view="reprojected">重投影 A→B</button>
+      <button data-view="support">支持度</button>
+      <button data-view="labels">标签 / 暂挂</button>
+    </div>
+
+    <div class="stage-wrap">
+      <div class="stage" id="stage">
+        <canvas id="canvas" width="320" height="240"></canvas>
+        <div id="hoverBox" class="hoverbox hidden"></div>
+        <div id="loading" class="loading hidden"><span class="spinner"></span>内核求解中…</div>
+      </div>
+      <div class="hover-hint">移动鼠标检查该像素的解码字段（u,v / 后向流 / 残差 / 支持度 / FB 环误差）</div>
+    </div>
+
+    <section class="panel wide">
+      <div class="subhead">金字塔尺度 <span id="scaleInfo" class="muted"></span></div>
+      <div id="scaleTabs" class="chips"></div>
+      <div class="scale-body">
+        <div id="convChart" class="chart"></div>
+        <div id="historyTable" class="history"></div>
+      </div>
+    </section>
+
+    <section class="panel wide">
+      <div class="subhead">多解分支（跨尺度候选）与选择理由</div>
+      <div id="branchChips" class="chips"></div>
+      <div id="branchExplain" class="explain"></div>
+    </section>
+
+    <section class="panel wide">
+      <div class="subhead">标签事件日志</div>
+      <div id="eventLog" class="eventlog"></div>
+    </section>
+  </main>
+</div>
+
+<!-- coordinate convention modal -->
+<div id="convModal" class="modal hidden">
+  <div class="modal-card">
+    <h2>坐标约定 / 前后向流 / 像素中心</h2>
+    <pre id="convText"></pre>
+    <div class="modal-foot">
+      <span class="muted">金字塔：x_k = 2^{-k} x_0，d_k = 2^{-k} d_0；延拓时坐标采样比 s_from/s_to、位移数值比 s_to/s_from。</span>
+      <button id="convClose" class="primary">知道了</button>
+    </div>
+  </div>
+</div>
+
+<script src="/web/app.js"></script>
+</body>
+</html>
