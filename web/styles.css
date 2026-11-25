@@ -259,6 +259,33 @@ input[type="file"] { font-size: 12px; color: var(--muted); }
 .modal-foot { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
 .modal-foot button { width: auto; }
 
+/* ---------- coordinate self-check modal ---------- */
+.audit-card { max-width: 900px; }
+.audit-bar { display: flex; align-items: center; gap: 12px; margin: 10px 0 14px; flex-wrap: wrap; }
+.audit-bar .pill { font-size: 12.5px; }
+.audit-full { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+.audit-full input { accent-color: var(--accent); }
+.audit-bar button { width: auto; margin-left: auto; }
+.audit-body { display: flex; flex-direction: column; gap: 10px; }
+.audit-item { border: 1px solid var(--line); border-left-width: 3px; border-radius: 8px; padding: 10px 12px; background: var(--bg-panel2); }
+.audit-item.pass { border-left-color: var(--ok); }
+.audit-item.fail { border-left-color: var(--danger); }
+.audit-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.audit-head .muted { margin-left: auto; font-family: var(--mono); font-size: 11px; }
+.audit-mark { font-family: var(--mono); font-weight: 700; font-size: 11px; padding: 2px 7px; border-radius: 5px; }
+.audit-item.pass .audit-mark { color: var(--accent2); background: #123029; border: 1px solid #1f5c49; }
+.audit-item.fail .audit-mark { color: #ff9b9b; background: #3a1717; border: 1px solid #6e2b2b; }
+.audit-detail { font-size: 12.5px; color: var(--text); margin: 4px 0 6px; }
+.audit-metrics { width: 100%; border-collapse: collapse; font-size: 12px; font-family: var(--mono); }
+.audit-metrics th, .audit-metrics td { text-align: left; padding: 3px 8px; border-top: 1px solid var(--line); }
+.audit-metrics th { color: var(--muted); font-weight: 500; }
+.audit-tb { max-height: 160px; overflow: auto; color: #ffb0b0; font-size: 11px; white-space: pre-wrap; }
+.audit-images { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 6px; }
+.audit-images figure { margin: 0; }
+.audit-images img { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #05070b; }
+.audit-images figcaption { font-size: 11.5px; color: var(--muted); text-align: center; margin-top: 4px; }
+.hover-warn { color: var(--warn); margin-top: 4px; max-width: 260px; white-space: normal; }
+
 /* ---------- responsive ---------- */
 @media (max-width: 1080px) {
   .layout { grid-template-columns: 1fr; }

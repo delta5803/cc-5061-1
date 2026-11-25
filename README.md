@@ -42,21 +42,46 @@ python3 -m denseflow.server
 - 左侧选择内置序列、拖动 pair 滑块或按 ▶ 连续播放；
 - 中央视图页签切换：**帧 A + 稠密矢量 / 帧 B / 流场色图 / 匹配残差 /
   重投影 A→B / 支持度 / 标签·暂挂区域**；
-- “金字塔尺度”条切换 L0…L3，查看每层原生分辨率流场（矢量已按坐标/位移比例
-  映射回全分辨率显示）与目标函数收敛曲线、逐外层迭代表；
+- “金字塔尺度”条切换 L0…L3，查看每层原生分辨率流场（矢量位置与数值均按
+  `denseflow/coord_audit.py` 的每层仿射坐标帧映射回全分辨率）与目标函数收敛曲线、
+  逐外层迭代表；
+- 顶栏 **“光流坐标自检”** 按钮会调用服务端 `/api/coord-check`，用**解析平移+缩放
+  序列真实运行稠密光流内核**，核对流向、尺度/裁切往返、缺失支持区与重投影残差，
+  并回显实测数值与证据图（**不是固定数据**）；
 - “多解分支”卡片可点击，服务端会**重跑该 pair 并精修所选分支**；
 - 在画布上移动鼠标，可解码该像素的 `u,v / bu,bv / 重投影残差 / 支持度 / FB 环误差`；
+  支持度不足或 FB 无效时会明确提示“无可靠支持/可能出画”，**原始 u,v 不会被表述成
+  已证明的零运动**；
 - 侧栏指标卡、支持度/失败反馈、标签事件日志随帧更新；
 - 切到 **“导入相邻帧”** 页可上传两张自己的图片（可一次多选），
   还能用笔刷涂鸦前景作为 mask 约束，调 α / 层数 / 外层迭代后真实求解，
   再在候选分支间切换。
 
-没有运行 `run_experiments.py` 也能启动服务器并使用“导入相邻帧”，
-但内置序列播放器会提示缺少 manifest。
+### 1.1 图形入口：导入相邻帧 → 切尺度 → 核对稠密矢量与匹配残差
+
+稠密光流的主入口是播放器图形界面（命令行 `run_experiments.py` /
+`check_flow_coordinates.py` 仅用于批量产物与维护校验）：
+
+1. 启动 `python3 -m denseflow.server` 后打开 <http://localhost:8000/>；
+2. 左侧切到 **“导入相邻帧”**，在“相邻两帧”控件一次多选两张图（按文件名排序取前两张），
+   或分别选择 **帧 A / 帧 B**；
+3. 选择金字塔层数、α、外层迭代后点击 **“运行稠密光流内核”**
+   （按钮直接 `POST /api/analyze` 调用 `analyze_pair`，返回逐像素 float32 字段，
+   不存在任何用固定矢量/固定残差冒充稠密结果的路径）；
+4. 结果出来后，在中央 **“金字塔尺度”** 条点击 L0…Ln 切换尺度：箭头尾部坐标与位移
+   都按该层 `LevelFrame` 换算回全分辨率；
+5. 保持在 **“帧 A + 矢量”** 核对稠密矢量方向/大小，切到 **“匹配残差”** 与
+   **“重投影 A→B”** 核对重投影对错；鼠标悬停任一像素可同时读到
+   `u,v,bu,bv,残差,支持度,FB误差`；低支持/出画像素会给出显式警告；
+6. 点顶栏 **“光流坐标自检”** 可随时用独立解析样例复核“流向是否正确、残差是否够小、
+   出画区是否显式失效”，所有数字均为当次真实执行证据。
+
+没有运行 `run_experiments.py` 也能启动服务器并使用“导入相邻帧”和“光流坐标自检”，
+但内置序列播放器会提示缺少 manifest；坐标自检不依赖任何实验产物或手改数据。
 
 ---
 
-## 2. 坐标与数学约定（唯一事实来源：`denseflow/coords.py`）
+## 2. 坐标与数学约定（可执行事实来源：`denseflow/coords.py` + `denseflow/coord_audit.py`）
 
 | 事项 | 约定 |
 |---|---|
@@ -67,18 +92,75 @@ python3 -m denseflow.server
 | 重投影 | `Â_B(x_B) = sample(A, x_B + B_B→A(x_B))`，残差即“匹配残差”视图 |
 | A 网格环误差 | `‖F(x) + B(x + F(x))‖` |
 | B 网格环误差 | `‖B(x) + F(x + B(x))‖`（B 坐标上后向传播的正确信任门） |
-| 金字塔 | `s_k = 2^{-k}`，`x_k = s_k x_0`，`d_k = s_k d_0` |
+| 金字塔（整数八层） | `s_k = 2^{-k}`，`x_k = s_k x_0`，`d_k = s_k d_0` |
 | prolong | 坐标采样乘 `s_from/s_to`；**位移数值乘 `s_to/s_from`** |
+| 任意尺度+裁切 | 每层显式保留仿射坐标帧 `x_0 = a·x_k + o`、`d_0 = a·d_k`（`denseflow/coord_audit.py:LevelFrame`） |
 
-`tests/test_core.py` 明确测试了亚像素平移 EPE、金字塔尺寸与位移数值变换。
+### 2.1 源 / 目标坐标算例（含常见混淆的修正）
+
+一个点在 **A 帧**位于 `x_A = 10`，前向流 `F_A→B(10) = +5`，所以它在 **B 帧**位于
+`x_B = 15`；对应地，B 网格在 `x_B = 15` 处的后向流是 `B_B→A(15) = −5`。
+
+- 正确的重投影：`x_B + B(x_B) = 15 + (−5) = 10`，即在 **A 的 10** 处采样；
+- **源/目标混淆的错误示例（不得这样写）**：把前向 `+5` 直接当成 B 网格的采样偏移，
+  写成 `sample(A, x_B + F) = sample(A, 15 + 5) = A@20`。前向流定义在 **A 网格**，
+  重投影需要的是定义在 **B 网格**的后向流，二者符号与索引网格都不同。
+
+`check_flow_coordinates.py` 中的 `convention_constants` 检查把这个算例固化为断言。
+
+### 2.2 金字塔格点原点 vs 连续像平面映射：据实测选择“显式原点仿射帧”
+
+整数八层金字塔用对齐抽稀构造（粗中心 `j` 对应全图中心 `2^k·j`），各层原点都是
+`(0,0)`，因此连续平面规则 `x_k = s_k x_0` 精确成立（实测标记质心映射回全图误差
+`0.0 px`，见审计项 `octave_pyramid_alignment`）。
+
+但**非整比缩放再裁切**后，“原点仍在 0”的连续写法不再成立。约定因此扩展为每层一个
+显式仿射帧 `LevelFrame(ax, ay, ox, oy)`：
+
+```
+x0 = ax·xk + ox,  y0 = ay·yk + oy      # 点坐标
+d0 = ax·dxk,      d0y = ay·dyk          # 位移（原点项抵消）
+```
+
+例如 `scale=0.6` 缩放后从缩放图 `(9, 7)` 像素处裁切出 `64×48` 层：
+`a = 1/0.6 ≈ 1.6667`，`o = (9/0.6, 7/0.6) = (15.0, 11.667)`。
+同一次实测（审计项 `noninteger_scale_crop_roundtrip`）：
+
+- 用显式仿射帧做 `全图点 → 层坐标 → 加位移 → 回全图` 的正/反向追查，最大误差
+  `< 3e-14`（严格往返落回原处）；
+- 把真实标记经 `0.6×` 缩放+裁切后测质心，显式原点映射回全图误差约 `0.13 px`；
+- 若丢掉裁切原点、仍用 `x0 = xk/s`，同一标记被错误登记到约 `19.1 px` 之外
+  （恰好≈原点偏置 `√(15²+11.67²) ≈ 19.0 px`）。
+
+**结论（据上述实测选定）**：保留每层格点的显式原点（仿射帧）；整数八层时它退化为
+大家熟悉的无原点连续映射。金字塔坐标换算因此是可执行约定，而不只是文字说明：
+`LevelFrame.octave / LevelFrame.scaled_crop / to_full / to_level /
+displacement_to_full` 与 `scale_and_crop` 全部被测试覆盖。
+
+### 2.3 缺失支持区必须显式表达，不能默认为零运动
+
+解析生成器 `analytic_motion_pair(dx, dy, zoom, …)`（见
+`denseflow/coord_audit.py` 与 `python3 -m denseflow.coord_audit`）输出精确的
+前/后向 GT 流、`fwd_valid / bwd_valid` 边界掩膜，以及
+`gt_fwd_nan / gt_bwd_nan`——**出画/新露出像素的 GT 是 NaN，不是 `(0,0)`**。
+内核侧对应的显式通道是：采样 `valid`、`support.score≈0`、`fb_error=NaN`
+（JSON float32 中编码为 `-1`）。检查会断言：出画带 `90%+` 像素被支持掩膜排除、
+`valid` 与坐标越界判定 100% 一致、环误差在越界采样处为 NaN 而非 0。
+
+`tests/test_core.py` 明确测试了亚像素平移 EPE、金字塔尺寸与位移数值变换；
+`tests/test_flow_coordinates.py` 覆盖上述坐标口径、非整比往返、流向、NaN 支持与
+“从空 cwd 子进程运行 CLI”的净目录检查。
 
 ---
 
 ## 3. 内核与可检查实现
 
 ```
+check_flow_coordinates.py    光流坐标检查 CLI（净目录/CI 入口，失败即非零退出）
 denseflow/
   coords.py       坐标约定、双线性采样、A/B 两种前后向环误差、mask 平移
+  coord_audit.py  LevelFrame 仿射坐标帧、解析平移+缩放生成器、尺度/裁切往返、
+                  流向与重投影残差审计、证据 JSON/PNG、文档一致性检查
   pyramid.py      高斯/盒式金字塔
   solver.py       目标函数 + Gauss-Newton/IRLS + 加权 Laplacian Jacobi 像素 2×2 求解
   candidates.py   跨尺度整数块匹配多候选、refine_seed 全分辨率复合种子精修、
@@ -88,13 +170,16 @@ denseflow/
   pipeline.py     analyze_pair：双向求解 → 信任/支持度 → 候选 → 选分支 → 标签传播；
                   api_payload / branch_payload / level_payloads / float32+base64
   runner.py       生成全部合成序列并逐 pair 真实运行、落盘 JSON/PNG/指标
-  server.py       零依赖 HTTP 服务（静态页 + JSON API + 手写 multipart 解析）
+  server.py       零依赖 HTTP 服务（静态页 + JSON API + 手写 multipart 解析
+                  + /api/coord-check 真实坐标审计）
   synth.py        translation/rotation/local_motion/repeat_occlude/texture_reveal/
-                  large_displacement 已知 GT 序列
+                  large_displacement 已知 GT 序列（解析平移+缩放另见 coord_audit.py）
   visualize.py    流场色图、支持度图、残差热图、矢量、标签叠加（held 琥珀色）
 web/
-  index.html / app.js / styles.css   原生 JS 播放器（无构建、无 CDN 依赖）
+  index.html / app.js / styles.css   原生 JS 播放器（无构建、无 CDN 依赖；
+                                     “光流坐标自检”弹窗渲染 /api/coord-check 实测）
 tests/test_core.py                   内核数值测试
+tests/test_flow_coordinates.py       坐标口径/往返/流向/残差/净目录 CLI 测试
 run_experiments.py                   = python3 -m denseflow.runner 的入口
 ```
 
@@ -188,6 +273,7 @@ rms_residual / outer_correction_max / inner_final_delta / inner_iters`，
 | `GET /` | 播放器页面 |
 | `GET /web/app.js`, `/web/styles.css` | 静态资源 |
 | `GET /api/health` | 内核/产物健康检查 |
+| `GET /api/coord-check?quick=1&force=0` | **真实运行**坐标审计（解析平移+缩放 + 稠密内核），返回逐项 PASS/FAIL、实测流向/残差/往返误差与证据图 URL；结果缓存，`force=1` 重跑 |
 | `GET /api/sequences` | `manifest.json`（序列、大位移研究） |
 | `GET /api/pair?seq=&pair=` | 一个 pair 的完整 JSON（含 fields_b64） |
 | `GET /api/rebranch?seq=&pair=&index=` | 用存储的 context **重跑**并返回某分支视图 |
@@ -204,9 +290,32 @@ rms_residual / outer_correction_max / inner_final_delta / inner_iters`，
 ## 6. 测试与自检
 
 ```bash
-python3 tests/test_core.py     # 坐标/采样/金字塔变换/平移精度/无纹理支持度
-node --check web/app.js        # 前端语法（如装了 Node）
+# 坐标口径维护校验（交付的光流坐标检查，净目录可跑，数据全部解析生成）
+python3 check_flow_coordinates.py --quick     # 约 1–3 s，CI/净目录入口
+python3 check_flow_coordinates.py --full      # 与核心测试同尺寸的精度门限
+python3 -m denseflow.coord_audit --out /tmp/coord_evidence
+
+# 内核数值测试 + 坐标口径 pytest 套件
+python3 tests/test_core.py
+python3 -m pytest tests/test_flow_coordinates.py -q
+python3 tests/test_flow_coordinates.py        # 也可直接运行
+
+python3 run_experiments.py                    # 旧稠密光流样例整体跑到底（3–6 分钟）
+node --check web/app.js                       # 前端语法（如装了 Node）
 ```
+
+`check_flow_coordinates.py` 不依赖 cwd、`experiments/output/` 或任何手改数据：
+它在内存中生成解析平移+缩放序列并真实调用 `estimate_flow`，把逐项结果、实测数值与
+三张证据图（稠密矢量 / 重投影 / 残差热图）写入
+`experiments/output/coord_check/coord_check_report.json`（可用 `--out` 改目录）。
+任何一项失败或检查自身抛错都会令进程以非零码退出，**不会伪报通过**。
+`tests/test_flow_coordinates.py::test_audit_cli_runs_from_empty_cwd` 还会从一个空的
+临时工作目录以子进程重跑该 CLI，落实“光流坐标检查须在净目录执行”。
+
+检查项覆盖：前后向源/目标算例、整数八层原点实测、非整比缩放+裁切往返、
+解析平移与缩放的流向符号、NaN/valid 缺失支持、解析与真实内核的重投影残差、
+以及 README/前端口径锚点一致性。图形入口是顶栏 **“光流坐标自检”** 按钮
+（见 §1.1），命令行仅作辅助。
 
 无浏览器环境下曾用 jsdom 对真实服务器做过 24 项冒烟检查
 （序列加载、指标卡、尺度切换、收敛表/SVG、悬停解码、rebranch、

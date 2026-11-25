@@ -37,21 +37,26 @@ def to_gray(img: np.ndarray) -> np.ndarray:
 def vector_grid(u: np.ndarray, v: np.ndarray, stride: int = 22,
                 reliable: np.ndarray | None = None,
                 coord_scale: float = 1.0,
-                value_scale: float = 1.0) -> list[list]:
+                value_scale: float = 1.0,
+                origin_xy: tuple[float, float] = (0.0, 0.0)) -> list[list]:
     """Subsample the dense field.
 
-    ``coord_scale`` maps native level coords to full-res (1/scale); the same
-    factor multiplies displacement values because d_full = d_level / scale.
+    Native sample ``(x, y)`` is an integer pixel *center*.  Its full-plane
+    position follows the level affine convention
+    ``X = coord_scale * x + origin_x`` (see
+    :class:`denseflow.coord_audit.LevelFrame`); displacement values are
+    multiplied by ``value_scale`` (same factor for an isotropic level).
     Returns rows ``[x, y, dx, dy, ok]`` in full-res coordinates/units.
     """
     h, w = u.shape
+    ox, oy = origin_xy
     rows = []
     for y in range(stride // 2, h, stride):
         for x in range(stride // 2, w, stride):
             ok = 1 if reliable is None or reliable[y, x] else 0
             rows.append([
-                round((x + 0.5) * coord_scale - 0.5, 1),
-                round((y + 0.5) * coord_scale - 0.5, 1),
+                round(x * coord_scale + ox, 1),
+                round(y * coord_scale + oy, 1),
                 float(u[y, x]) * value_scale,
                 float(v[y, x]) * value_scale,
                 ok,
@@ -394,15 +399,20 @@ def _jsonable(o):
 
 def level_payloads(res: dict, stride: int = 26) -> list[dict]:
     """Vector grids + image URLs for every pyramid scale of the fwd field."""
+    from .coord_audit import LevelFrame
+
     out = []
+    full_h, full_w = res["height"], res["width"]
     level_fields = res["fwd"]["level_fields"]
     for lf in level_fields:
         k = lf["level"]
         scale = lf["scale"]
         u, v = lf["u"], lf["v"]
+        frame = LevelFrame.octave(k, full_h, full_w)
         native_stride = max(4, int(round(stride * scale)))
         grid = vector_grid(u, v, stride=native_stride,
-                           coord_scale=1.0 / scale, value_scale=1.0 / scale)
+                           coord_scale=frame.ax, value_scale=frame.ax,
+                           origin_xy=(frame.ox, frame.oy))
         flow_img = vz.flow_to_rgb(u, v)
         # Residual at this level against the matching pyramid image is not
         # retained; show flow + vector grid and level convergence history.
@@ -412,6 +422,9 @@ def level_payloads(res: dict, stride: int = 26) -> list[dict]:
             "scale": scale,
             "native_width": u.shape[1],
             "native_height": u.shape[0],
+            "frame": {"ax": frame.ax, "ay": frame.ay,
+                      "ox": frame.ox, "oy": frame.oy,
+                      "map": "x0 = ax*xk + ox"},
             "vectors": grid,
             "flow_url": vz.to_data_url(flow_img),
             "converged": rep.get("converged"),

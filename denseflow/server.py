@@ -42,6 +42,7 @@ ART_DIR = os.path.join(ROOT, "experiments", "output")
 
 JOBS: dict[str, dict] = {}
 REBUILD_CACHE: dict[str, dict] = {}
+COORD_CHECK_CACHE: dict[str, dict] = {}
 MAX_JOBS = 12
 
 CONTENT_TYPES = {
@@ -173,6 +174,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "time": time.time(),
                                "artifacts": os.path.isdir(ART_DIR)})
 
+        if path == "/api/coord-check":
+            return self.handle_coord_check(qs)
+
         if path == "/api/sequences":
             mf = os.path.join(ART_DIR, "manifest.json")
             if not os.path.isfile(mf):
@@ -216,6 +220,40 @@ class Handler(BaseHTTPRequestHandler):
             return self._file(os.path.join(WEB_DIR, "index.html"))
 
         self._json({"error": "unknown route", "path": path}, 404)
+
+    def handle_coord_check(self, qs):
+        """Run the real coordinate audit (analytic pairs + dense kernel).
+
+        The UI "坐标自检" button depends on this result; no canned vectors or
+        residuals are ever returned.  Results are cached per mode unless
+        ``force=1``.
+        """
+        quick = (qs.get("quick") or ["1"])[0] not in ("0", "false", "no")
+        force = (qs.get("force") or ["0"])[0] in ("1", "true", "yes")
+        key = "quick" if quick else "full"
+        try:
+            if force or key not in COORD_CHECK_CACHE:
+                from denseflow.coord_audit import run_audit
+
+                out_dir = os.path.join(ART_DIR, "coord_check")
+                report = run_audit(out_dir=out_dir, quick=quick)
+                urls = {}
+                for fname, label in (
+                    ("coord_check_vectors.png", "vectors"),
+                    ("coord_check_reprojected.png", "reprojected"),
+                    ("coord_check_residual.png", "residual"),
+                ):
+                    fpath = os.path.join(out_dir, fname)
+                    if os.path.isfile(fpath):
+                        urls[label] = f"/artifacts/coord_check/{fname}"
+                report["artifact_urls"] = urls
+                COORD_CHECK_CACHE[key] = report
+            return self._json(COORD_CHECK_CACHE[key])
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            return self._json({"ok": False, "error": str(exc),
+                               "traceback": traceback.format_exc()}, 500)
 
     def handle_rebranch(self, qs):
         seq = (qs.get("seq") or [""])[0]

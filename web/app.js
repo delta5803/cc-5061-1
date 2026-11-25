@@ -284,7 +284,14 @@ function setupHover() {
       html += `<div>F: u=${fmt(u, 3)} v=${fmt(vv, 3)} |F|=${fmt(Math.hypot(u, vv), 3)}</div>`;
       html += `<div>B: bu=${fmt(bu, 3)} bv=${fmt(bv, 3)}</div>`;
       html += `<div>重投影残差=${fmt(res, 2)}  支持度=${fmt(sup, 3)}</div>`;
-      html += `<div>FB环误差(A网格)=${fb < 0 ? "无效/出界" : fmt(fb, 3) + " px"}</div>`;
+      const fbInvalid = fb < 0 || Number.isNaN(fb);
+      html += `<div>FB环误差(A网格)=${fbInvalid ? "无效/出界" : fmt(fb, 3) + " px"}</div>`;
+      // Missing support is explicit: low support or invalid FB must never be
+      // read as "zero motion proven". Raw u/v stay visible but are flagged.
+      const noSupport = fbInvalid || (!Number.isNaN(sup) && sup < 0.15);
+      if (noSupport) {
+        html += '<div class="hover-warn">该像素无可靠支持/可能出画：原始 u,v 不构成“已证明静止”，重投影残差也可能不适用。</div>';
+      }
     } else {
       html += `<div class="muted">尺度视图仅提供抽样矢量；切回“帧 A+矢量”可检查逐像素字段</div>`;
     }
@@ -1117,10 +1124,98 @@ function setupConventionModal() {
     };
     $("#convText").textContent = JSON.stringify(c, null, 2)
       + "\n\n金字塔尺度: s_k = 2^-k;  x_k = s_k*x_0;  d_k = s_k*d_0。\n"
-      + "prolong: 坐标采样乘 s_from/s_to，位移数值乘 s_to/s_from。";
+      + "prolong: 坐标采样乘 s_from/s_to，位移数值乘 s_to/s_from。\n"
+      + "非整比缩放+裁切: 每层显式保留仿射原点 x_0 = a*x_k + o "
+      + "(d_0 = a*d_k)；整数八层 o=0 时即上面的连续平面规则。\n"
+      + "算例: A@x=10 前向 F=+5 -> B@x=15；在 B 处必须用 B流=-5 采样 "
+      + "A@(15-5)=10，把 +5 当 B 网格偏移会错采 A@20（源/目标混淆）。";
   };
   $("#convBtn").addEventListener("click", () => { fill(); modal.classList.remove("hidden"); });
   $("#convClose").addEventListener("click", () => modal.classList.add("hidden"));
+  modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
+}
+
+/* ====================================================================== */
+/* coordinate self-check (real /api/coord-check run, never canned data)    */
+/* ====================================================================== */
+
+function auditMetricRows(metrics, thresholds) {
+  const keys = Object.keys(metrics || {}).filter((k) => k !== "levels");
+  if (!keys.length) return "";
+  const rows = keys.map((k) => {
+    let val = metrics[k];
+    if (Array.isArray(val)) val = "[" + val.map((x) =>
+      (typeof x === "number" ? fmt(x, 3) : x)).join(", ") + "]";
+    else if (typeof val === "number") val = fmt(val, 4);
+    const th = thresholds && thresholds[k];
+    return `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(val))}</td>`
+      + `<td class="muted">${th != null ? escapeHtml(String(th)) : ""}</td></tr>`;
+  }).join("");
+  return `<table class="audit-metrics"><thead><tr><th>实测项</th><th>值</th><th>门限</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
+function renderAuditReport(rep) {
+  const host = $("#auditBody");
+  if (!rep) { host.innerHTML = '<div class="status err">无报告</div>'; return; }
+  const overall = $("#auditSummary");
+  overall.textContent = rep.ok
+    ? `全部通过 ${rep.passed}/${rep.n_checks}`
+    : `存在失败 ${rep.failed}/${rep.n_checks}`;
+  overall.className = "pill " + (rep.ok ? "ok" : "bad");
+  $("#auditEvidence").textContent = rep.evidence_dir
+    ? "执行证据目录: " + rep.evidence_dir : "";
+  const urls = rep.artifact_urls || {};
+  const imgs = ["vectors", "reprojected", "residual"]
+    .filter((k) => urls[k])
+    .map((k) => `<figure><img src="${urls[k]}?t=${Date.now()}" alt="${k}"/>
+      <figcaption>${({ vectors: "稠密矢量(真实内核)",
+        reprojected: "重投影 A→B", residual: "匹配残差热图" })[k]}</figcaption></figure>`)
+    .join("");
+  host.innerHTML = (rep.checks || []).map((c) => `
+    <div class="audit-item ${c.ok ? "pass" : "fail"}">
+      <div class="audit-head">
+        <span class="audit-mark">${c.ok ? "PASS" : "FAIL"}</span>
+        <b>${escapeHtml(c.title || c.id)}</b>
+        <span class="muted">${escapeHtml(c.id)} · ${c.elapsed_sec ?? "?"}s</span>
+      </div>
+      <div class="audit-detail">${escapeHtml(c.detail || "")}</div>
+      ${auditMetricRows(c.metrics, c.thresholds)}
+      ${!c.ok && c.traceback ? `<pre class="audit-tb">${escapeHtml(c.traceback.split("\n").slice(-6).join("\n"))}</pre>` : ""}
+    </div>`).join("")
+    + (imgs ? `<div class="audit-images">${imgs}</div>` : "");
+}
+
+function setupAuditModal() {
+  const modal = $("#auditModal");
+  const run = async (force) => {
+    const btn = $("#auditRun");
+    const sum = $("#auditSummary");
+    btn.disabled = true;
+    sum.textContent = "内核执行中（解析序列 + 双向稠密光流）…";
+    sum.className = "pill";
+    try {
+      const full = $("#auditFull").checked ? 0 : 1;
+      const r = await fetch(`/api/coord-check?quick=${full}&force=${force ? 1 : 0}`);
+      const rep = await r.json();
+      if (!r.ok || rep.error) throw new Error(rep.error || ("HTTP " + r.status));
+      renderAuditReport(rep);
+    } catch (e) {
+      $("#auditSummary").textContent = "检查执行失败";
+      $("#auditSummary").className = "pill bad";
+      $("#auditBody").innerHTML =
+        `<div class="status err">坐标检查未能运行: ${escapeHtml(e.message)}。`
+        + "可改用命令行 <code>python3 check_flow_coordinates.py --quick</code>。</div>";
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  $("#auditBtn").addEventListener("click", () => {
+    modal.classList.remove("hidden");
+    if (!modal.dataset.loaded) { modal.dataset.loaded = "1"; run(false); }
+  });
+  $("#auditRun").addEventListener("click", () => run(true));
+  $("#auditClose").addEventListener("click", () => modal.classList.add("hidden"));
   modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
 }
 
@@ -1145,6 +1240,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupUpload();
   setupPlayerControls();
   setupConventionModal();
+  setupAuditModal();
   renderCanvas();
   await checkHealth();
   await loadManifest();

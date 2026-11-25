@@ -17,6 +17,7 @@
   </div>
   <div class="top-actions">
     <span id="health" class="pill">检测内核…</span>
+    <button id="auditBtn" class="ghost">光流坐标自检</button>
     <button id="convBtn" class="ghost">坐标约定</button>
   </div>
 </header>
@@ -150,8 +151,28 @@
     <h2>坐标约定 / 前后向流 / 像素中心</h2>
     <pre id="convText"></pre>
     <div class="modal-foot">
-      <span class="muted">金字塔：x_k = 2^{-k} x_0，d_k = 2^{-k} d_0；延拓时坐标采样比 s_from/s_to、位移数值比 s_to/s_from。</span>
+      <span class="muted">金字塔：x_k = 2^{-k} x_0，d_k = 2^{-k} d_0；延拓时坐标采样比 s_from/s_to、位移数值比 s_to/s_from。非整比缩放+裁切时每层保留显式原点 x_0=a·x_k+o（见“光流坐标自检”实测）。</span>
       <button id="convClose" class="primary">知道了</button>
+    </div>
+  </div>
+</div>
+
+<!-- coordinate audit modal: every number comes from /api/coord-check -->
+<div id="auditModal" class="modal hidden">
+  <div class="modal-card audit-card">
+    <h2>光流坐标检查 · 流向 / 尺度往返 / 重投影残差</h2>
+    <div class="audit-bar">
+      <span id="auditSummary" class="pill">尚未执行</span>
+      <label class="audit-full"><input type="checkbox" id="auditFull" /> 全精度（更慢）</label>
+      <button id="auditRun" class="primary">调用稠密光流内核执行检查</button>
+    </div>
+    <div id="auditBody" class="audit-body">
+      <div class="muted">点击“执行检查”后，服务端会用解析平移+缩放序列真实运行稠密光流内核，
+      核对流向符号、非整比缩放+裁切往返、缺失支持区与重投影残差；不使用任何固定/冒充数据。</div>
+    </div>
+    <div class="modal-foot">
+      <span class="muted" id="auditEvidence"></span>
+      <button id="auditClose" class="primary">关闭</button>
     </div>
   </div>
 </div>
